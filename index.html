@@ -461,7 +461,8 @@ function makePlayer(idx, name, x){
     respawnT: 0, invuln: 0, score: 0,
     weaponKey: null, atkState: 0, atkT: 0, atkHold: 0, cooldown: 0,
     hitstun: 0, hitFlash: 0, deathT: 0, runT: 0, moving: false,
-    nearPick: false, attackFacing: 1
+    nearPick: false, attackFacing: 1,
+    accent: idx  /* 0=蓝方, 1=橙方，用于渲染颜色区分 */
   };
 }
 function weaponOf(p){ return p.weaponKey ? WEAPONS[p.weaponKey] : FISTS; }
@@ -615,20 +616,23 @@ var Host = {
     }
 
     var P = this.players;
-    var inp0 = { mx: Input.mx, jumpEdge: Input.jumpEdge, atkEdge: Input.atkEdge, pickEdge: Input.pickEdge, attack: Input.attack };
+    var inp0 = { mx: Input.mx, jumpEdge: Input.jumpEdge, atkEdge: Input.atkEdge, pickEdge: Input.pickEdge, pickup: Input.pickup, attack: Input.attack };
     Input.jumpEdge = Input.atkEdge = Input.pickEdge = false;
     var g = this.guestInput;
     if (this.simT - g.lastSeen > 0.5) g = { mx:0, jump:false, attack:false, atkEdge:false, pickup:false };
-    /* 双保险：atkEdge 可能因帧时序丢失，用 attack 的上升沿兜底触发蓄力 */
+    /* 双保险：atkEdge/pickEdge 可能因帧时序丢失，用上升沿兜底 */
     var atkPressed = g.attack && !g._lastAtk;
     g._lastAtk = !!g.attack;
-    var inp1 = { mx: g.mx, jumpEdge: g.jump, atkEdge: g.atkEdge || atkPressed, pickEdge: g.pickup, attack: g.attack };
+    var pickPressed = g.pickup && !g._lastPick;
+    g._lastPick = !!g.pickup;
+    var inp1 = { mx: g.mx, jumpEdge: g.jump, atkEdge: g.atkEdge || atkPressed, pickEdge: g.pickup || pickPressed, pickup: g.pickup, attack: g.attack };
 
     for (var i = 0; i < 2; i++) {
       var p = P[i], inp = i === 0 ? inp0 : inp1;
       if (p.alive) {
         p.invuln = Math.max(0, p.invuln - dt);
         p.hitFlash = Math.max(0, p.hitFlash - dt);
+        p._pickCd = Math.max(0, (p._pickCd || 0) - dt);
         updateKinematics(p, inp, dt);
         updateAttackTimers(p, inp, dt, this.fireArrow.bind(this));
       } else {
@@ -687,18 +691,19 @@ var Host = {
       if (!p.alive) continue;
       p.nearPick = false;
       for (var k = 0; k < this.pickups.length; k++) {
-        if (dist2(p.x, p.y, this.pickups[k].x, CFG.groundY) < 55 * 55) { p.nearPick = true; break; }
+        if (dist2(p.x, p.y, this.pickups[k].x, CFG.groundY) < 85 * 85) { p.nearPick = true; break; }
       }
       var inp = i === 0 ? inp0 : inp1;
-      if (inp.pickEdge && p.nearPick && p.hitstun <= 0) {
+      if ((inp.pickEdge || inp.pickup) && p.nearPick && p.hitstun <= 0 && !p._pickCd) {
         var idx = -1;
         for (var k = 0; k < this.pickups.length; k++) {
-          if (dist2(p.x, p.y, this.pickups[k].x, CFG.groundY) < 55 * 55) { idx = k; break; }
+          if (dist2(p.x, p.y, this.pickups[k].x, CFG.groundY) < 85 * 85) { idx = k; break; }
         }
         if (idx >= 0) {
           var key = this.pickups[idx].weapon;
           this.pickups.splice(idx, 1);
           this.equipWeapon(p, key);
+          p._pickCd = 0.35;
         }
       }
     }
@@ -1075,7 +1080,11 @@ var GuestPred = {
     var dx = auth.x - m.x;
     if (Math.abs(dx) > 50) m.x += dx * 0.3;
     else if (Math.abs(dx) > 4) m.vx = lerp(m.vx, (auth.x - m.x) * 6, 0.25);
-    if (Math.abs(auth.y - m.y) > 50) m.y = lerp(m.y, auth.y, 0.3);
+    /* y 方向：跳跃时不用位置 lerp（会卡顿），改用速度修正；
+       只有严重不同步(>120px)才直接拉回，防止穿墙/落地异常 */
+    var dy = auth.y - m.y;
+    if (Math.abs(dy) > 120) m.y = lerp(m.y, auth.y, 0.25);
+    else if (Math.abs(dy) > 6) m.vy = lerp(m.vy, dy * 8, 0.15);
     var wasAlive = m.alive;
     m.hp = auth.hp; m.alive = !!auth.al;
     m.score = auth.sc;
@@ -1253,6 +1262,7 @@ function drawStickman(P){
   var fullCharge = P.alive && wd.charge && P.atkState === 2 && P.atkT >= wd.chargeTime;
   if (fullCharge) { ctx.shadowColor = '#ffd76b'; ctx.shadowBlur = 16; }
   var w = 5;
+  var bodyColor = P.accent === 1 ? '#ffaa44' : '#5ab8ff';  /* 橙方/蓝方 */
 
   var armA = -0.25;
   if (P.alive && wd.charge && P.atkState === 2) {
@@ -1283,7 +1293,7 @@ function drawStickman(P){
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  ctx.strokeStyle = P.hitFlash > 0 ? '#fff' : '#e6e6e6';
+  ctx.strokeStyle = P.hitFlash > 0 ? '#fff' : bodyColor;
   ctx.lineWidth = w;
   ctx.beginPath();
   ctx.moveTo(0, -20); ctx.lineTo(Math.sin(legL) * 22, -20 + Math.cos(legL) * 20);
@@ -1324,7 +1334,7 @@ function drawStickman(P){
   var armReach = 32;
   var hx = Math.cos(armA) * armReach, hy = -48 + breathe + Math.sin(armA) * armReach;
   ctx.lineWidth = w;
-  ctx.strokeStyle = P.hitFlash > 0 ? '#fff' : '#e6e6e6';
+  ctx.strokeStyle = P.hitFlash > 0 ? '#fff' : bodyColor;
   ctx.beginPath();
   ctx.moveTo(0, -50 + breathe); ctx.lineTo(hx, hy);
   ctx.stroke();
@@ -1766,7 +1776,7 @@ function render(dt){
     if (!pk) continue;
     var wKey = pk.w || pk.weapon;   /* host 用 weapon 字段，snap 用 w 字段 */
     var bob = Math.sin(tNow * 3 + pk.t * 2) * 5;
-    var near = me && Math.abs(me.x - pk.x) < 70;
+    var near = me && dist2(me.x, me.y, pk.x, CFG.groundY) < 85 * 85;
     ctx.save();
     ctx.translate(pk.x, CFG.groundY - 20 + bob);
     ctx.globalAlpha = near ? 1 : 0.85;
