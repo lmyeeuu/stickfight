@@ -149,6 +149,20 @@
     opacity:0; transition:opacity .25s; pointer-events:none; max-width:86vw; text-align:center;
   }
   #toast.show { opacity:1; }
+  /* settings panel */
+  .settings-list { margin-top: 14px; }
+  .setting-row { display:flex; align-items:center; justify-content:space-between; padding:12px 4px; border-bottom:1px solid rgba(255,255,255,0.07); }
+  .setting-row:last-child { border-bottom:none; }
+  .setting-label { font-size:15px; color:#e8ecf2; letter-spacing:1px; }
+  .setting-range { flex:1; max-width:160px; height:4px; -webkit-appearance:none; background:rgba(255,255,255,0.15); border-radius:2px; outline:none; }
+  .setting-range::-webkit-slider-thumb { -webkit-appearance:none; width:18px; height:18px; border-radius:50%; background:#5ab8ff; cursor:pointer; box-shadow:0 0 8px rgba(90,184,255,0.5); }
+  .setting-range::-moz-range-thumb { width:18px; height:18px; border-radius:50%; background:#5ab8ff; cursor:pointer; border:none; }
+  .toggle-switch { position:relative; display:inline-block; width:48px; height:26px; }
+  .toggle-switch input { opacity:0; width:0; height:0; }
+  .toggle-slider { position:absolute; cursor:pointer; inset:0; background:rgba(255,255,255,0.15); border-radius:13px; transition:0.25s; }
+  .toggle-slider:before { content:""; position:absolute; height:20px; width:20px; left:3px; top:3px; background:#fff; border-radius:50%; transition:0.25s; }
+  .toggle-switch input:checked + .toggle-slider { background:#5ab8ff; }
+  .toggle-switch input:checked + .toggle-slider:before { transform:translateX(22px); }
 </style>
 </head>
 <body>
@@ -167,6 +181,7 @@
       <button class="btn btn-primary" id="btnCreate">创建房间</button>
       <button class="btn btn-secondary" id="btnJoin">加入房间</button>
     </div>
+    <button class="btn btn-ghost" id="btnSettings" style="margin-top:10px;width:100%;letter-spacing:2px">⚙ 设 置</button>
     <div class="field" style="margin-top:10px">
       <label>房间码（4–6 位数字）</label>
       <input id="inpCode" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="000000">
@@ -189,6 +204,48 @@
       手机：左侧摇杆 + 右侧按键 · 建议横屏游玩<br>
       弓：按住攻击键蓄力，松开射出（蓄满伤害更高）
     </div>
+  </div>
+</div>
+
+<!-- ================= SETTINGS ================= -->
+<div id="screen-settings" class="screen">
+  <div class="panel">
+    <h1 class="title" style="font-size:30px;letter-spacing:4px">设 置</h1>
+    <div class="settings-list">
+      <div class="setting-row">
+        <span class="setting-label">音效</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="setSfx" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">音效音量</span>
+        <input type="range" id="setVol" min="0" max="100" value="50" class="setting-range">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">屏幕震动</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="setShake" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">粒子特效</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="setParticles" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">显示玩家名字</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="setNames" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+    <button class="btn btn-primary" id="btnSettingsBack" style="margin-top:18px;width:100%">返 回</button>
   </div>
 </div>
 
@@ -363,6 +420,35 @@ var SFX = {
   count: function(){ this.tone(440, 0.14, 'square', 0.12); },
   go: function(){ this.tone(660, 0.3, 'square', 0.16); this.tone(880, 0.4, 'square', 0.16, null, 0.12); },
   win: function(){ [523, 659, 784, 1047].forEach(function(f, i){ SFX.tone(f, 0.25, 'triangle', 0.18, null, i * 0.13); }); }
+};
+
+/* ---------------- settings (persisted) ---------------- */
+var Settings = {
+  sfx: true, vol: 50, shake: true, particles: true, names: true,
+  load: function(){
+    try {
+      var s = JSON.parse(localStorage.getItem('sb_settings') || '{}');
+      this.sfx = s.sfx !== false;
+      this.vol = s.vol != null ? clamp(s.vol, 0, 100) : 50;
+      this.shake = s.shake !== false;
+      this.particles = s.particles !== false;
+      this.names = s.names !== false;
+    } catch(e){}
+  },
+  save: function(){
+    try { localStorage.setItem('sb_settings', JSON.stringify({ sfx:this.sfx, vol:this.vol, shake:this.shake, particles:this.particles, names:this.names })); } catch(e){}
+  },
+  apply: function(){
+    SFX.setMuted(!this.sfx);
+    if (SFX.master) SFX.master.gain.value = this.sfx ? (this.vol / 100) * 0.5 : 0;
+  },
+  syncUI: function(){
+    $('setSfx').checked = this.sfx;
+    $('setVol').value = this.vol;
+    $('setShake').checked = this.shake;
+    $('setParticles').checked = this.particles;
+    $('setNames').checked = this.names;
+  }
 };
 
 /* unlock audio on first interaction */
@@ -548,6 +634,7 @@ function updateAttackTimers(p, inp, dt, fireCb){
 /* ---------------- particles / numbers ---------------- */
 var particles = [], dmgNums = [];
 function spawnParticles(x, y, n, opts){
+  if (!Settings.particles) return;
   opts = opts || {};
   for (var i = 0; i < n; i++) {
     var a = rand(0, Math.PI * 2), s = rand(opts.speed || 120, (opts.speed || 120) * 2.4);
@@ -1387,11 +1474,13 @@ function drawStickman(P){
     ctx.fillRect(x - bw / 2, hy2, bw * hpPct, bh);
     ctx.font = '700 11px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillStyle = P.accent === 0 ? P_COLORS[0] : P_COLORS[1];
-    ctx.fillText(P.name, x, hy2 - 7);
-    ctx.font = '700 10px system-ui, sans-serif';
-    ctx.fillStyle = '#ffd76b';
-    ctx.fillText('×' + P.score, x + 52, hy2 - 7);
+    if (Settings.names) {
+      ctx.fillStyle = P.accent === 0 ? P_COLORS[0] : P_COLORS[1];
+      ctx.fillText(P.name, x, hy2 - 7);
+      ctx.font = '700 10px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd76b';
+      ctx.fillText('×' + P.score, x + 52, hy2 - 7);
+    }
     ctx.restore();
   }
   ctx.shadowBlur = 0;
@@ -1502,6 +1591,7 @@ function showToast(msg){
 function setPhase(p){
   uiPhase = p;
   $('screen-menu').classList.toggle('hidden', p !== 'menu');
+  $('screen-settings').classList.toggle('hidden', p !== 'settings');
   $('screen-conn').classList.toggle('hidden', p !== 'conn');
   $('screen-wait').classList.toggle('hidden', p !== 'wait');
   $('hud').classList.toggle('on', p === 'play');
@@ -1554,6 +1644,8 @@ function goMenu(){
     myName = localStorage.getItem('sb_name') || ('玩家' + Math.floor(Math.random() * 90 + 10));
     if (localStorage.getItem('sb_muted') === '1') { SFX.muted = true; $('btnMute').textContent = '🔇'; }
   } catch(e){}
+  Settings.load();
+  Settings.apply();
   $('inpName').value = myName;
 
   function readName(){ myName = ($('inpName').value.trim() || '玩家').slice(0, 12); try { localStorage.setItem('sb_name', myName); } catch(e){} return myName; }
@@ -1628,6 +1720,15 @@ function goMenu(){
     else Net.send({ t:'rematch' });
   });
   $('btnMute').addEventListener('click', function(){ SFX.ensure(); SFX.setMuted(!SFX.muted); });
+
+  /* settings panel */
+  $('btnSettings').addEventListener('click', function(){ Settings.syncUI(); setPhase('settings'); });
+  $('btnSettingsBack').addEventListener('click', function(){ setPhase('menu'); });
+  $('setSfx').addEventListener('change', function(){ Settings.sfx = this.checked; Settings.save(); Settings.apply(); });
+  $('setVol').addEventListener('input', function(){ Settings.vol = parseInt(this.value); Settings.save(); Settings.apply(); });
+  $('setShake').addEventListener('change', function(){ Settings.shake = this.checked; Settings.save(); });
+  $('setParticles').addEventListener('change', function(){ Settings.particles = this.checked; Settings.save(); });
+  $('setNames').addEventListener('change', function(){ Settings.names = this.checked; Settings.save(); });
 
   $('inpCode').addEventListener('keydown', function(e){
     if (e.key === 'Enter') $('btnJoin').click();
@@ -1718,8 +1819,8 @@ function render(dt){
   var cam;
   if (Net.role === 'host' && Host.players) {
     cam = Host.camera;
-    cam._sx = shakeT > 0 ? (Math.random() - 0.5) * shakeMag * shakeT : 0;
-    cam._sy = shakeT > 0 ? (Math.random() - 0.5) * shakeMag * shakeT : 0;
+    cam._sx = (shakeT > 0 && Settings.shake) ? (Math.random() - 0.5) * shakeMag * shakeT : 0;
+    cam._sy = (shakeT > 0 && Settings.shake) ? (Math.random() - 0.5) * shakeMag * shakeT : 0;
   } else {
     var ax = GuestPred.me ? GuestPred.me.x : CFG.worldW / 2;
     var bx = snapBuf.length ? opp.x : ax;
@@ -1731,8 +1832,8 @@ function render(dt){
       x: clamp(mid, CFG.worldW * 0.3, CFG.worldW * 0.7),
       y: CFG.groundY - (canvasH / z2) * 0.22,
       zoom: z2,
-      _sx: shakeT > 0 ? (Math.random() - 0.5) * shakeMag * shakeT : 0,
-      _sy: shakeT > 0 ? (Math.random() - 0.5) * shakeMag * shakeT : 0
+      _sx: (shakeT > 0 && Settings.shake) ? (Math.random() - 0.5) * shakeMag * shakeT : 0,
+      _sy: (shakeT > 0 && Settings.shake) ? (Math.random() - 0.5) * shakeMag * shakeT : 0
     };
   }
   shakeT = Math.max(0, shakeT - dt * 3.2);
