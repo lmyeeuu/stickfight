@@ -280,7 +280,7 @@ var CFG = {
   worldW: 2000, worldH: 1200, groundY: 1060,
   gravity: 2600, moveSpeed: 330, accel: 2600, friction: 2600,
   jumpVel: 840, maxFall: 1500,
-  step: 1/60, snapInterval: 1/30,
+  step: 1/60, snapInterval: 1/60,   /* 快照 60fps，跳跃等高动态运动插值更平滑 */
   killsToWin: 5, respawnTime: 3, invulnTime: 2.2,
   weaponSpawnEvery: 9, maxPickups: 6, pickupLifetime: 40
 };
@@ -625,7 +625,10 @@ var Host = {
     g._lastAtk = !!g.attack;
     var pickPressed = g.pickup && !g._lastPick;
     g._lastPick = !!g.pickup;
-    var inp1 = { mx: g.mx, jumpEdge: g.jump, atkEdge: g.atkEdge || atkPressed, pickEdge: g.pickup || pickPressed, pickup: g.pickup, attack: g.attack };
+    /* 跳跃双保险：jumpHold(持续按住)的上升沿兜底，防止单帧 jumpEdge 丢包 */
+    var jumpPressed = (g.jump || g.jumpHold) && !g._lastJumpHold;
+    g._lastJumpHold = !!(g.jump || g.jumpHold);
+    var inp1 = { mx: g.mx, jumpEdge: g.jump || jumpPressed, atkEdge: g.atkEdge || atkPressed, pickEdge: g.pickup || pickPressed, pickup: g.pickup, attack: g.attack };
 
     for (var i = 0; i < 2; i++) {
       var p = P[i], inp = i === 0 ? inp0 : inp1;
@@ -973,7 +976,7 @@ var Net = {
       var g = Host.guestInput;
       if (d.seq > g.lastSeq) {
         g.lastSeq = d.seq;
-        g.mx = d.mx || 0; g.jump = !!d.jump; g.attack = !!d.attack; g.atkEdge = !!d.atkEdge; g.pickup = !!d.pickup;
+        g.mx = d.mx || 0; g.jump = !!d.jump; g.jumpHold = !!d.jH; g.attack = !!d.attack; g.atkEdge = !!d.atkEdge; g.pickup = !!d.pickup;
         g.lastSeen = Host.simT;
       }
     } else if (d.t === 'rematch') {
@@ -1080,11 +1083,14 @@ var GuestPred = {
     var dx = auth.x - m.x;
     if (Math.abs(dx) > 50) m.x += dx * 0.3;
     else if (Math.abs(dx) > 4) m.vx = lerp(m.vx, (auth.x - m.x) * 6, 0.25);
-    /* y 方向：跳跃时不用位置 lerp（会卡顿），改用速度修正；
-       只有严重不同步(>120px)才直接拉回，防止穿墙/落地异常 */
+    /* y 方向：跳跃时不被服务器拉回（防卡顿）。
+       只有服务器也确认玩家在空中、或严重不同步(>150px)时才修正 y */
+    var hostInAir = auth.y < CFG.groundY - 30;
     var dy = auth.y - m.y;
-    if (Math.abs(dy) > 120) m.y = lerp(m.y, auth.y, 0.25);
-    else if (Math.abs(dy) > 6) m.vy = lerp(m.vy, dy * 8, 0.15);
+    if (hostInAir || Math.abs(dy) > 150) {
+      if (Math.abs(dy) > 120) m.y = lerp(m.y, auth.y, 0.25);
+      else if (Math.abs(dy) > 6) m.vy = lerp(m.vy, dy * 8, 0.15);
+    }
     var wasAlive = m.alive;
     m.hp = auth.hp; m.alive = !!auth.al;
     m.score = auth.sc;
@@ -1103,7 +1109,7 @@ var GuestPred = {
 var snapBuf = [];
 var opp = { x: 0, y: 0, f: 1, as: 0, atkT: 0, runT: 0, mv: 0, flash: 0, inv: 0,
             hp: 100, al: true, w: null, sc: 0, dt: 0, name: '玩家1' };
-var OPP_RENDER_DELAY = 0.085;   /* 渲染延迟：约 2.5 个快照，让插值有缓冲 */
+var OPP_RENDER_DELAY = 0.055;   /* 渲染延迟：约 3-4 个快照(60fps)，插值平滑且及时 */
 function interpOpp(){
   if (!snapBuf.length) return;
   var latest = snapBuf[snapBuf.length - 1];
@@ -1657,7 +1663,7 @@ function sendInput(){
   Net.send({
     t:'input', seq: ++Net.inputSeq,
     mx: Math.round(Input.mx * 100) / 100,
-    jump: sendBuf.jump, attack: !!Input.attack, atkEdge: sendBuf.atkEdge, pickup: sendBuf.pickup
+    jump: sendBuf.jump, jH: !!Input.jump, attack: !!Input.attack, atkEdge: sendBuf.atkEdge, pickup: sendBuf.pickup
   });
   sendBuf.jump = sendBuf.atkEdge = sendBuf.pickup = false;
 }
@@ -1687,7 +1693,7 @@ function frame(now){
         GuestPred.update(dt);
         interpOpp();
         stepParticles(dt);
-        if (now - lastInputSend > 33) { lastInputSend = now; sendInput(); }
+        if (now - lastInputSend > 16) { lastInputSend = now; sendInput(); }
       }
     }
   }
